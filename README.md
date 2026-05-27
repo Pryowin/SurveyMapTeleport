@@ -19,7 +19,7 @@ Elder Scrolls Online add-on that adds a **Call to Zone** option to the inventory
 2. Right-click an **opened** survey report or treasure map (not a sealed survey container).
 3. Choose **Call to Zone**.
 
-Beam Me Up will port you the same way as its slash commands or zone list: to a group/friend/guild member in that zone when possible, otherwise to a wayshrine in that zone (if that option is enabled in Beam Me Up settings).
+Beam Me Up will port you the same way as its slash commands or zone list: to a group/friend/guild member in that zone when possible. If no one is available and recall would cost gold, it jumps to your **preferred house** for that zone (set in Beam Me Up: Houses list → right-click → *Set as preferred house*, or `/bmu/house/set/zone`). Otherwise it uses a wayshrine (if *Show zones without players or houses* is enabled in Beam Me Up).
 
 ## How it works
 

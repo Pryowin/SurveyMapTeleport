@@ -100,8 +100,55 @@ local function resolveZoneId(bagId, slotIndex)
     return nil
 end
 
+-- Mirrors BMU.sc_porting, but uses your zone-preferred house instead of gold wayshrine recall.
+local function portToZone(zoneId)
+    local resultTable = BMU.createTable({
+        index = BMU.indexListZoneHidden,
+        fZoneId = zoneId,
+        dontDisplay = true,
+    })
+    local entry = resultTable[1]
+
+    if entry and entry.displayName and entry.displayName ~= "" then
+        BMU.PortalToPlayer(
+            entry.displayName,
+            entry.sourceIndexLeading,
+            entry.zoneName,
+            entry.zoneId,
+            entry.category,
+            true,
+            true,
+            true
+        )
+        return
+    end
+
+    if BMU.savedVarsAcc.showZonesWithoutPlayers2 and BMU.isZoneOverlandZone(zoneId) then
+        local usePreferredHouse = GetInteractionType() ~= INTERACTION_FAST_TRAVEL
+        if usePreferredHouse and BMU.getZoneSpecificHouse and BMU.portToOwnHouse then
+            local parentZoneId = BMU.getParentZoneId(zoneId)
+            local preferredHouseId = BMU.getZoneSpecificHouse(parentZoneId)
+            if preferredHouseId and preferredHouseId > 0
+                and CanJumpToHouseFromCurrentLocation()
+                and CanLeaveCurrentLocationViaTeleport() then
+                local parentZoneName = BMU.formatName(GetZoneNameById(parentZoneId), false)
+                BMU.portToOwnHouse(false, preferredHouseId, true, parentZoneName)
+                return
+            end
+        end
+        BMU.PortalToZone(zoneId)
+        return
+    end
+
+    if BMU.sc_porting then
+        BMU.sc_porting(zoneId)
+    elseif BMU.printToChat and BMU.SI then
+        BMU.printToChat(BMU.SI.get("SI_TELE_CHAT_NO_FAST_TRAVEL"))
+    end
+end
+
 local function callToZone(bagId, slotIndex)
-    if not BMU or not BMU.sc_porting then
+    if not BMU or not BMU.createTable or not BMU.PortalToPlayer then
         CHAT_ROUTER:AddSystemMessage(GetString(SI_SMT_BMU_MISSING))
         return
     end
@@ -112,11 +159,11 @@ local function callToZone(bagId, slotIndex)
         return
     end
 
-    BMU.sc_porting(zoneId)
+    portToZone(zoneId)
 end
 
 local function onInventoryContextMenu(inventorySlot, slotActions)
-    if not BMU or not BMU.getDataMapInfo or not BMU.sc_porting then
+    if not BMU or not BMU.getDataMapInfo or not BMU.createTable then
         return
     end
 
