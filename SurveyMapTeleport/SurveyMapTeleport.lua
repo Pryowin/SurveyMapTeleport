@@ -13,6 +13,7 @@ local string_sub = string.sub
 ZO_CreateStringId("SI_SMT_CALL_TO_ZONE", "Call to Zone")
 ZO_CreateStringId("SI_SMT_BMU_MISSING", "Survey Map Teleport requires Beam Me Up to be enabled.")
 ZO_CreateStringId("SI_SMT_ZONE_UNKNOWN", "Survey Map Teleport: Could not determine the zone for this map.")
+ZO_CreateStringId("SI_SMT_NO_TRAVEL", "Survey Map Teleport: No travel option for this zone (no players, no house there, or no wayshrine discovered).")
 
 local surveyMarkerLower
 local treasureMarkerLower
@@ -100,51 +101,90 @@ local function resolveZoneId(bagId, slotIndex)
     return nil
 end
 
+local function normalizeZoneId(zoneId)
+    return tonumber(zoneId) or zoneId
+end
+
+local function zoneIdsMatch(zoneIdA, zoneIdB)
+    zoneIdA = normalizeZoneId(zoneIdA)
+    zoneIdB = normalizeZoneId(zoneIdB)
+    if not zoneIdA or not zoneIdB then
+        return false
+    end
+    if zoneIdA == zoneIdB then
+        return true
+    end
+    if BMU.getParentZoneId then
+        local parentA = normalizeZoneId(BMU.getParentZoneId(zoneIdA))
+        local parentB = normalizeZoneId(BMU.getParentZoneId(zoneIdB))
+        return parentA == zoneIdB or parentB == zoneIdA or (parentA and parentB and parentA == parentB)
+    end
+    return false
+end
+
 local function houseMatchesZone(record, zoneId, parentZoneId)
     if not record then
         return false
     end
-    local recordZoneId = record.zoneId
-    local recordParentZoneId = record.parentZoneId
-    return recordZoneId == zoneId
-        or recordZoneId == parentZoneId
-        or recordParentZoneId == zoneId
-        or recordParentZoneId == parentZoneId
+    return zoneIdsMatch(record.zoneId, zoneId)
+        or zoneIdsMatch(record.zoneId, parentZoneId)
+        or zoneIdsMatch(record.parentZoneId, zoneId)
+        or zoneIdsMatch(record.parentZoneId, parentZoneId)
 end
 
 local function getPreferredHouseIdForZone(zoneId, parentZoneId)
     if not BMU.getZoneSpecificHouse then
         return nil
     end
-    return BMU.getZoneSpecificHouse(zoneId) or BMU.getZoneSpecificHouse(parentZoneId)
+    local preferred = BMU.getZoneSpecificHouse(zoneId) or BMU.getZoneSpecificHouse(parentZoneId)
+    if preferred and preferred > 0 then
+        return preferred
+    end
+    local zoneHouses = BMU.savedVarsServ and BMU.savedVarsServ.zoneSpecificHouses
+    if not zoneHouses then
+        return nil
+    end
+    for mappedZoneId, houseId in pairs(zoneHouses) do
+        if zoneIdsMatch(mappedZoneId, zoneId) or zoneIdsMatch(mappedZoneId, parentZoneId) then
+            if houseId and houseId > 0 then
+                return houseId
+            end
+        end
+    end
+    return nil
+end
+
+local function getOwnedHousesList()
+    if BMU.IsNotKeyboard and BMU.IsNotKeyboard() then
+        return ZO_COLLECTIBLE_DATA_MANAGER:GetAllCollectibleDataObjects(
+            { ZO_CollectibleCategoryData.IsHousingCategory },
+            { ZO_CollectibleData.IsUnlocked }
+        )
+    end
+    if COLLECTIONS_BOOK_SINGLETON then
+        return COLLECTIONS_BOOK_SINGLETON:GetOwnedHouses()
+    end
+    return {}
+end
+
+local function getHouseIdFromEntry(house, isGamepad)
+    if isGamepad then
+        return house:GetReferenceId()
+    end
+    return house.houseId
 end
 
 local function findOwnedHouseInZone(zoneId, parentZoneId)
     local parentZoneName = BMU.formatName(GetZoneNameById(parentZoneId), false)
     local preferredHouseId = getPreferredHouseIdForZone(zoneId, parentZoneId)
     local fallbackHouseId
-    local fallbackParentZoneName = parentZoneName
+    local isGamepad = BMU.IsNotKeyboard and BMU.IsNotKeyboard()
 
-    local ownedHouses
-    if BMU.IsNotKeyboard and BMU.IsNotKeyboard() then
-        ownedHouses = ZO_COLLECTIBLE_DATA_MANAGER:GetAllCollectibleDataObjects(
-            { ZO_CollectibleCategoryData.IsHousingCategory },
-            { ZO_CollectibleData.IsUnlocked }
-        )
-    else
-        ownedHouses = COLLECTIONS_BOOK_SINGLETON:GetOwnedHouses()
-    end
-
-    for _, house in pairs(ownedHouses) do
-        local houseId
-        if BMU.IsNotKeyboard and BMU.IsNotKeyboard() then
-            houseId = house:GetReferenceId()
-        else
-            houseId = house.houseId
-        end
+    for _, house in pairs(getOwnedHousesList()) do
+        local houseId = getHouseIdFromEntry(house, isGamepad)
         if houseId and houseId > 0 then
-            local houseParentZoneId = BMU.getParentZoneId(GetHouseZoneId(houseId))
-            if houseParentZoneId == zoneId or houseParentZoneId == parentZoneId then
+            local houseZoneId = GetHouseZoneId(houseId)
+            if zoneIdsMatch(houseZoneId, zoneId) or zoneIdsMatch(houseZoneId, parentZoneId) then
                 if preferredHouseId and houseId == preferredHouseId then
                     return houseId, parentZoneName
                 end
@@ -158,11 +198,12 @@ local function findOwnedHouseInZone(zoneId, parentZoneId)
     if preferredHouseId and preferredHouseId > 0 then
         return preferredHouseId, parentZoneName
     end
-    return fallbackHouseId, fallbackParentZoneName
+    return fallbackHouseId, parentZoneName
 end
 
 local function resolveHouseForZone(zoneId, resultTable)
-    local parentZoneId = BMU.getParentZoneId(zoneId)
+    local parentZoneId = normalizeZoneId(BMU.getParentZoneId(zoneId))
+    zoneId = normalizeZoneId(zoneId)
     local parentZoneName = BMU.formatName(GetZoneNameById(parentZoneId), false)
     local preferredHouseId = getPreferredHouseIdForZone(zoneId, parentZoneId)
 
@@ -170,11 +211,12 @@ local function resolveHouseForZone(zoneId, resultTable)
         return preferredHouseId, parentZoneName
     end
 
-    local fallbackHouseId
-    for _, record in pairs(resultTable) do
-        if record and record.isOwnHouse and record.houseId and record.houseId > 0 then
-            if houseMatchesZone(record, zoneId, parentZoneId) then
-                return record.houseId, record.parentZoneName or parentZoneName
+    if resultTable then
+        for _, record in pairs(resultTable) do
+            if record and record.isOwnHouse and record.houseId and record.houseId > 0 then
+                if houseMatchesZone(record, zoneId, parentZoneId) then
+                    return record.houseId, record.parentZoneName or parentZoneName
+                end
             end
         end
     end
@@ -182,33 +224,61 @@ local function resolveHouseForZone(zoneId, resultTable)
     return findOwnedHouseInZone(zoneId, parentZoneId)
 end
 
+local function jumpToHouseOutside(houseId, zoneId)
+    if BMU.portToOwnHouseWithZonePreference then
+        -- Preferred house for zone first, then houseId as fallback (never primary residence).
+        BMU.portToOwnHouseWithZonePreference(true, zoneId, true, houseId)
+    elseif BMU.portToOwnHouse then
+        local parentZoneId = BMU.getParentZoneId(zoneId)
+        local parentZoneName = BMU.formatName(GetZoneNameById(parentZoneId), false)
+        BMU.portToOwnHouse(false, houseId, true, parentZoneName)
+    end
+end
+
 local function tryPortToHouseInZone(zoneId, resultTable)
-    if not BMU.portToOwnHouse then
+    if not BMU.portToOwnHouse and not BMU.portToOwnHouseWithZonePreference then
         return false
     end
-    if not CanJumpToHouseFromCurrentLocation() or not CanLeaveCurrentLocationViaTeleport() then
+    if not CanLeaveCurrentLocationViaTeleport() then
         return false
     end
 
-    local houseId, parentZoneName = resolveHouseForZone(zoneId, resultTable)
+    local houseId = resolveHouseForZone(zoneId, resultTable)
     if not houseId or houseId == 0 then
         return false
     end
 
-    BMU.portToOwnHouse(false, houseId, true, parentZoneName)
+    -- Inventory context menus are insecure; defer like Beam Me Up does for UseItem.
+    zo_callLater(function()
+        if not CanLeaveCurrentLocationViaTeleport() then
+            return
+        end
+        jumpToHouseOutside(houseId, zoneId)
+    end, 250)
+
     return true
 end
 
--- Player jump first; then own house in zone; then gold wayshrine (BMU setting).
+local function reportNoTravel()
+    if BMU.printToChat and BMU.SI then
+        BMU.printToChat(BMU.SI.get("SI_TELE_CHAT_NO_FAST_TRAVEL"))
+    else
+        CHAT_ROUTER:AddSystemMessage(GetString(SI_SMT_NO_TRAVEL))
+    end
+end
+
+-- Player jump first; then own house in zone; then wayshrine recall for overland zones.
 local function portToZone(zoneId)
+    zoneId = normalizeZoneId(zoneId)
     local resultTable = BMU.createTable({
         index = BMU.indexListZoneHidden,
         fZoneId = zoneId,
         dontDisplay = true,
+        noOwnHouses = false,
     })
 
     for _, entry in pairs(resultTable) do
-        if entry and entry.displayName and entry.displayName ~= "" then
+        if entry and entry.displayName and entry.displayName ~= "" and not entry.zoneWithoutPlayer then
             BMU.PortalToPlayer(
                 entry.displayName,
                 entry.sourceIndexLeading,
@@ -227,16 +297,12 @@ local function portToZone(zoneId)
         return
     end
 
-    if BMU.savedVarsAcc.showZonesWithoutPlayers2 and BMU.isZoneOverlandZone(zoneId) then
+    if BMU.isZoneOverlandZone and BMU.isZoneOverlandZone(zoneId) and BMU.PortalToZone then
         BMU.PortalToZone(zoneId)
         return
     end
 
-    if BMU.sc_porting then
-        BMU.sc_porting(zoneId)
-    elseif BMU.printToChat and BMU.SI then
-        BMU.printToChat(BMU.SI.get("SI_TELE_CHAT_NO_FAST_TRAVEL"))
-    end
+    reportNoTravel()
 end
 
 local function callToZone(bagId, slotIndex)
